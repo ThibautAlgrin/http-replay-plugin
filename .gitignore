@@ -1,3 +1,6 @@
 /.idea
+/coverage
+/log
 /vendor
 /composer.lock
+manifest.json

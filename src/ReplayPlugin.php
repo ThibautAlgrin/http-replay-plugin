@@ -1,19 +1,20 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Http\Client\Common\Plugin;
 
 use Http\Client\Common\Plugin;
 use Http\Message\StreamFactory;
 use Http\Promise\FulfilledPromise;
+use Http\Promise\Promise;
 use Psr\Cache\CacheItemInterface;
 use Psr\Cache\CacheItemPoolInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 
 /**
- * Class ReplayPlugin
- *
- * @package Http\Client\Common\Plugin
+ * Class ReplayPlugin.
  */
 class ReplayPlugin implements Plugin
 {
@@ -42,15 +43,22 @@ class ReplayPlugin implements Plugin
     private $recorderEnabled = false;
 
     /**
+     * @var string
+     */
+    private $manifest;
+
+    /**
      * ReplayPlugin constructor.
      *
      * @param CacheItemPoolInterface $pool
      * @param StreamFactory          $streamFactory
+     * @param string|null            $manifest
      */
-    public function __construct(CacheItemPoolInterface $pool, StreamFactory $streamFactory)
+    public function __construct(CacheItemPoolInterface $pool, StreamFactory $streamFactory, ?string $manifest = null)
     {
         $this->pool = $pool;
         $this->streamFactory = $streamFactory;
+        $this->manifest = $manifest;
     }
 
     /**
@@ -78,7 +86,7 @@ class ReplayPlugin implements Plugin
      *
      * @return FulfilledPromise|\Http\Promise\Promise
      */
-    public function handleRequest(RequestInterface $request, callable $next, callable $first)
+    public function handleRequest(RequestInterface $request, callable $next, callable $first): Promise
     {
         $cacheKey = $this->createCacheKey($request);
         $cacheItem = $this->pool->getItem($cacheKey);
@@ -87,7 +95,7 @@ class ReplayPlugin implements Plugin
             return new FulfilledPromise($this->createResponseFromCacheItem($cacheItem));
         }
 
-        if ($this->recorderEnabled === false) {
+        if (false === $this->recorderEnabled) {
             throw new \RuntimeException(sprintf(
                 'Cannot replay request [%s] "%s" because record mode is disable',
                 $request->getMethod(),
@@ -96,14 +104,24 @@ class ReplayPlugin implements Plugin
         }
 
         return $next($request)->then(function (ResponseInterface $response) use ($cacheItem) {
-            $bodyStream = $response->withoutHeader('Date')->withoutHeader('X-Debug-Token')->withoutHeader('X-Debug-Token-Link')->getBody();
+            $bodyStream = $response
+                ->withoutHeader('Date')
+                ->withoutHeader('ETag')
+                ->withoutHeader('X-Debug-Token')
+                ->withoutHeader('X-Debug-Token-Link')
+                ->getBody()
+            ;
             $body = $bodyStream->__toString();
             if ($bodyStream->isSeekable()) {
                 $bodyStream->rewind();
             }
 
             $cacheItem->set([
-                'response' => $response->withoutHeader('Date')->withoutHeader('X-Debug-Token')->withoutHeader('X-Debug-Token-Link'),
+                'response' => $response
+                    ->withoutHeader('Date')
+                    ->withoutHeader('ETag')
+                    ->withoutHeader('X-Debug-Token')
+                    ->withoutHeader('X-Debug-Token-Link'),
                 'body' => $body,
             ]);
             $this->pool->save($cacheItem);
@@ -125,7 +143,7 @@ class ReplayPlugin implements Plugin
 
         $parts = [
             $request->getMethod(),
-            $request->getUri(),
+            (string) $request->getUri(),
             trim(implode(
                 ' ',
                 array_map(
@@ -136,12 +154,27 @@ class ReplayPlugin implements Plugin
                     $request->getHeaders()
                 )
             )),
-            $request->getBody(),
+            (string) $request->getBody(),
         ];
 
         $key = $this->bucket.'_'.hash('sha1', trim(implode(' ', $parts)));
 
+        if (null !== $this->manifest) {
+            $this->buildManifest($key, $parts);
+        }
+
         return $key;
+    }
+
+    /**
+     * @param string $key
+     * @param array  $parts
+     */
+    private function buildManifest(string $key, array $parts)
+    {
+        $data = is_file($this->manifest) ? json_decode(file_get_contents($this->manifest), true) : [];
+        $data[$key] = $parts;
+        file_put_contents($this->manifest, json_encode($data));
     }
 
     /**
