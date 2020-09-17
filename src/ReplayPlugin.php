@@ -48,6 +48,11 @@ class ReplayPlugin implements Plugin
     private $manifest;
 
     /**
+     * @var string[]
+     */
+    private $keepHeaders;
+
+    /**
      * ReplayPlugin constructor.
      *
      * @param CacheItemPoolInterface $pool
@@ -59,6 +64,7 @@ class ReplayPlugin implements Plugin
         $this->pool = $pool;
         $this->streamFactory = $streamFactory;
         $this->manifest = $manifest;
+        $this->keepHeaders = ['Host', 'Content-Type'];
     }
 
     /**
@@ -75,6 +81,11 @@ class ReplayPlugin implements Plugin
     public function setRecorderEnabled($recorderEnabled)
     {
         $this->recorderEnabled = $recorderEnabled;
+    }
+
+    public function addKeepHeaders(string $keepHeader)
+    {
+        $this->keepHeaders[] = $keepHeader;
     }
 
     /**
@@ -148,7 +159,7 @@ class ReplayPlugin implements Plugin
                 ' ',
                 array_map(
                     function ($key, array $values) {
-                        return in_array($key, ['Host', 'Content-Type']) ? $key.':'.implode(',', $values) : '';
+                        return in_array($key, \array_unique($this->keepHeaders)) ? $key.':'.implode(',', $values) : '';
                     },
                     array_keys($request->getHeaders()),
                     $request->getHeaders()
@@ -190,5 +201,4 @@ class ReplayPlugin implements Plugin
             $this->streamFactory->createStream($data['body'])
         );
     }
-
 }
